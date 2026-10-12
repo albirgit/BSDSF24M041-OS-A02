@@ -1,6 +1,7 @@
 /*
-* Programming Assignment 02: ls v1.2.0
-* Added: -l (long listing), default column display (down then across)
+* Programming Assignment 02: ls v1.3.0
+* Added: -l (long listing), default column display (down then across),
+*        -x (horizontal / row-major display)
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,13 +20,20 @@
 
 extern int errno;
 
+/* which display function to use */
+typedef enum {
+    MODE_DEFAULT,      /* down then across */
+    MODE_LONG,         /* -l */
+    MODE_HORIZONTAL    /* -x */
+} display_mode_t;
+
 /* column widths + total blocks for -l, computed in a first pass */
 typedef struct {
     int  nlink, user, group, size;
     long blocks;
 } widths_t;
 
-void do_ls(const char *dir, int long_flag);
+void do_ls(const char *dir, display_mode_t mode);
 
 /* ---------- helpers for -l ---------- */
 
@@ -154,7 +162,7 @@ static void print_columns(char **names, int n, int maxlen)
     int colw = maxlen + 2;                 /* longest name + 2 spaces gap */
     int cols = term_width() / colw;        /* how many columns fit */
     if (cols < 1)
-        cols = 1;                          /* very long name: at least 1 column */
+        cols = 1;
     int rows = (n + cols - 1) / cols;      /* ceiling division */
 
     for (int r = 0; r < rows; r++)
@@ -170,43 +178,70 @@ static void print_columns(char **names, int n, int maxlen)
     }
 }
 
+/* -x display: left to right, wrap when the line is full */
+static void print_horizontal(char **names, int n, int maxlen)
+{
+    if (n == 0)
+        return;
+
+    int colw  = maxlen + 2;
+    int width = term_width();
+    int pos   = 0;                         /* current horizontal position */
+
+    for (int i = 0; i < n; i++)
+    {
+        if (pos + colw > width && pos > 0) /* next item won't fit: new line */
+        {
+            putchar('\n');
+            pos = 0;
+        }
+        printf("%-*s", colw, names[i]);
+        pos += colw;
+    }
+    putchar('\n');
+}
+
 /* ---------- main ---------- */
 
 int main(int argc, char *argv[])
 {
     int opt;
-    int long_flag = 0;
+    display_mode_t mode = MODE_DEFAULT;
 
-    while ((opt = getopt(argc, argv, "l")) != -1)
+    while ((opt = getopt(argc, argv, "lx")) != -1)
     {
         switch (opt)
         {
         case 'l':
-            long_flag = 1;
+            mode = MODE_LONG;              /* -l wins over -x, like real ls */
+            break;
+        case 'x':
+            if (mode != MODE_LONG)
+                mode = MODE_HORIZONTAL;
             break;
         default:
-            fprintf(stderr, "Usage: %s [-l] [dir...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l] [-x] [dir...]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
     if (optind == argc)
     {
-        do_ls(".", long_flag);
+        do_ls(".", mode);
     }
     else
     {
         for (int i = optind; i < argc; i++)
         {
             printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i], long_flag);
+            do_ls(argv[i], mode);
             puts("");
         }
     }
     return 0;
 }
 
-void do_ls(const char *dir, int long_flag)
+void do_ls(const char *dir, display_mode_t mode)
 {
     DIR *dp = opendir(dir);
     if (dp == NULL)
@@ -226,7 +261,7 @@ void do_ls(const char *dir, int long_flag)
         if (entry->d_name[0] == '.')
             continue;
 
-        if (n == cap)                      /* array full: double its size */
+        if (n == cap)
         {
             cap = cap ? cap * 2 : 16;
             char **tmp = realloc(names, cap * sizeof(char *));
@@ -238,7 +273,7 @@ void do_ls(const char *dir, int long_flag)
             names = tmp;
         }
 
-        names[n] = strdup(entry->d_name);  /* own copy: d_name is reused by readdir */
+        names[n] = strdup(entry->d_name);
         if (names[n] == NULL)
         {
             perror("strdup");
@@ -254,8 +289,8 @@ void do_ls(const char *dir, int long_flag)
         perror("readdir failed");
     closedir(dp);
 
-    /* Step 2: display */
-    if (long_flag)
+    /* Step 2: choose the display function based on the mode flag */
+    if (mode == MODE_LONG)
     {
         widths_t w = {0, 0, 0, 0, 0};
         for (int i = 0; i < n; i++)
@@ -263,6 +298,10 @@ void do_ls(const char *dir, int long_flag)
         printf("total %ld\n", w.blocks / 2);
         for (int i = 0; i < n; i++)
             print_long(dir, names[i], &w);
+    }
+    else if (mode == MODE_HORIZONTAL)
+    {
+        print_horizontal(names, n, maxlen);
     }
     else
     {
