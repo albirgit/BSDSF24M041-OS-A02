@@ -1,7 +1,7 @@
 /*
-* Programming Assignment 02: ls v1.3.0
+* Programming Assignment 02: ls v1.4.0
 * Added: -l (long listing), default column display (down then across),
-*        -x (horizontal / row-major display)
+*        -x (horizontal display), alphabetical sort
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -201,6 +201,14 @@ static void print_horizontal(char **names, int n, int maxlen)
     putchar('\n');
 }
 
+/* qsort comparison function: compares two filenames alphabetically */
+static int cmp_names(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;    /* a points to a char*, so cast to char** */
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
+}
+
 /* ---------- main ---------- */
 
 int main(int argc, char *argv[])
@@ -288,6 +296,9 @@ void do_ls(const char *dir, display_mode_t mode)
     if (errno != 0)
         perror("readdir failed");
     closedir(dp);
+
+    /* sort names alphabetically before any display function is called */
+    qsort(names, n, sizeof(char *), cmp_names);
 
     /* Step 2: choose the display function based on the mode flag */
     if (mode == MODE_LONG)
