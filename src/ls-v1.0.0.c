@@ -1,7 +1,7 @@
 /*
-* Programming Assignment 02: ls v1.4.0
+* Programming Assignment 02: ls v1.5.0
 * Added: -l (long listing), default column display (down then across),
-*        -x (horizontal display), alphabetical sort
+*        -x (horizontal display), alphabetical sort, colorized output
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +20,17 @@
 
 extern int errno;
 
+/* ---------- ANSI color codes ---------- */
+#define C_RESET   "\033[0m"
+#define C_BLUE    "\033[0;34m"   /* directory */
+#define C_GREEN   "\033[0;32m"   /* executable */
+#define C_RED     "\033[0;31m"   /* tarballs / archives */
+#define C_PINK    "\033[0;35m"   /* symbolic link */
+#define C_REVERSE "\033[7m"      /* special files: device, socket, fifo */
+
+/* set in main(): colors only when output goes to a terminal */
+static int use_color = 0;
+
 /* which display function to use */
 typedef enum {
     MODE_DEFAULT,      /* down then across */
@@ -34,6 +45,54 @@ typedef struct {
 } widths_t;
 
 void do_ls(const char *dir, display_mode_t mode);
+
+/* ---------- color helpers ---------- */
+
+/* choose the color for a file based on its st_mode and name */
+static const char *color_for(const char *name, mode_t m)
+{
+    if (S_ISLNK(m))                                   /* needs lstat, not stat */
+        return C_PINK;
+    if (S_ISDIR(m))
+        return C_BLUE;
+    if (S_ISCHR(m) || S_ISBLK(m) || S_ISSOCK(m) || S_ISFIFO(m))
+        return C_REVERSE;
+    if (strstr(name, ".tar") || strstr(name, ".gz") || strstr(name, ".zip"))
+        return C_RED;
+    if (S_ISREG(m) && (m & (S_IXUSR | S_IXGRP | S_IXOTH)))
+        return C_GREEN;                               /* any execute bit set */
+    return "";                                        /* normal file: no color */
+}
+
+/* print only the name (colored), no padding */
+static void print_colored(const char *name, mode_t m)
+{
+    const char *color = use_color ? color_for(name, m) : "";
+    if (color[0] != '\0')
+        printf("%s%s%s", color, name, C_RESET);
+    else
+        printf("%s", name);
+}
+
+/* lstat the entry, print it colored, then pad with spaces to column width.
+   Padding is done by hand because escape codes are invisible but would be
+   counted as characters by printf("%-*s"), which would break the alignment. */
+static void print_name_padded(const char *dir, const char *name, int colw)
+{
+    char path[PATH_MAX];
+    struct stat st;
+    mode_t m = 0;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (lstat(path, &st) == 0)
+        m = st.st_mode;
+
+    print_colored(name, m);
+
+    int pad = colw - (int)strlen(name);
+    if (pad > 0)
+        printf("%*s", pad, "");
+}
 
 /* ---------- helpers for -l ---------- */
 
@@ -123,13 +182,15 @@ static void print_long(const char *dir, const char *name, const widths_t *w)
 
     char *t = ctime(&st.st_mtime) + 4;     /* skip "Tue " */
 
-    printf("%s %*ld %-*s %-*s %*ld %.12s %s",
+    printf("%s %*ld %-*s %-*s %*ld %.12s ",
            perms,
            w->nlink, (long)st.st_nlink,
            w->user,  ubuf,
            w->group, gbuf,
            w->size,  (long)st.st_size,
-           t, name);
+           t);
+
+    print_colored(name, st.st_mode);       /* colored filename */
 
     if (S_ISLNK(st.st_mode)) {
         char target[PATH_MAX];
@@ -154,7 +215,7 @@ static int term_width(void)
 }
 
 /* Default display: "down then across" */
-static void print_columns(char **names, int n, int maxlen)
+static void print_columns(const char *dir, char **names, int n, int maxlen)
 {
     if (n == 0)
         return;
@@ -172,14 +233,14 @@ static void print_columns(char **names, int n, int maxlen)
             int i = r + c * rows;          /* the key formula */
             if (i >= n)
                 break;
-            printf("%-*s", colw, names[i]);
+            print_name_padded(dir, names[i], colw);
         }
         putchar('\n');
     }
 }
 
 /* -x display: left to right, wrap when the line is full */
-static void print_horizontal(char **names, int n, int maxlen)
+static void print_horizontal(const char *dir, char **names, int n, int maxlen)
 {
     if (n == 0)
         return;
@@ -195,7 +256,7 @@ static void print_horizontal(char **names, int n, int maxlen)
             putchar('\n');
             pos = 0;
         }
-        printf("%-*s", colw, names[i]);
+        print_name_padded(dir, names[i], colw);
         pos += colw;
     }
     putchar('\n');
@@ -215,6 +276,8 @@ int main(int argc, char *argv[])
 {
     int opt;
     display_mode_t mode = MODE_DEFAULT;
+
+    use_color = isatty(STDOUT_FILENO);     /* no escape codes when piped/redirected */
 
     while ((opt = getopt(argc, argv, "lx")) != -1)
     {
@@ -312,11 +375,11 @@ void do_ls(const char *dir, display_mode_t mode)
     }
     else if (mode == MODE_HORIZONTAL)
     {
-        print_horizontal(names, n, maxlen);
+        print_horizontal(dir, names, n, maxlen);
     }
     else
     {
-        print_columns(names, n, maxlen);
+        print_columns(dir, names, n, maxlen);
     }
 
     /* Step 3: free memory */
